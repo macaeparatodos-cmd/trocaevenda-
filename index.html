@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Ramos Troca e Venda - Portal Regional</title>
+    
+    <!-- Configurações PWA -->
+    <meta name="theme-color" content="#1e3a8a">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    
+    <!-- Scripts Principais -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+    
+    <!-- Google Pay API -->
+    <script async src="https://pay.google.com/gp/p/js/pay.js"></script>
+    <!-- Ícones Lucide -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
+        body { font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transparent; background-color: #f8fafc; }
+        
+        /* Logo Animada */
+        .animate-spin-slow { animation: spin 8s linear infinite; }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        
+        /* Modais Sólidos */
+        .modal-overlay { background: rgba(2, 6, 23, 0.98); backdrop-filter: blur(20px); position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 1rem; }
+        .modal-container { 
+            background-color: #ffffff !important; border-radius: 2.5rem; 
+            width: 100%; max-width: 500px; max-height: 90vh; overflow-y: auto;
+            position: relative; box-shadow: 0 30px 60px -12px rgba(0, 0, 0, 0.6);
+        }
+        
+        .tag-promoted { background: #fbbf24; color: #000; font-weight: 900; }
+        .tag-exchange { background: #2563eb; color: #fff; font-weight: 900; }
+        
+        /* Splash Screen */
+        .splash-screen {
+            position: fixed; inset: 0; background: #1e3a8a; display: flex; 
+            flex-direction: column; align-items: center; justify-content: center; z-index: 9999;
+        }
+        .loader-circle {
+            width: 40px; height: 40px; border: 4px solid rgba(255,255,255,0.1);
+            border-top: 4px solid #fff; border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+    </style>
+</head>
+<body class="text-left">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useMemo, useEffect } = React;
+
+        // ✅ CONFIGURAÇÃO FIREBASE (PROJETO: trocaevenda-18c10)
+        const firebaseConfig = {
+          apiKey: "AIzaSyDxN4gKWZEmIhwYD5tVlmppDWYtfVNwB1Q",
+          authDomain: "trocaevenda-18c10.firebaseapp.com",
+          projectId: "trocaevenda-18c10",
+          storageBucket: "trocaevenda-18c10.firebasestorage.app",
+          messagingSenderId: "302007044953",
+          appId: "1:302007044953:web:31f6640cba098689e2da48",
+          measurementId: "G-01VHG0J7MC"
+        };
+
+        if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+        const googleProvider = new firebase.auth.GoogleAuthProvider();
+        const appId = 'trocaevenda-18c10';
+
+        const Icon = ({ name, size = 24, className = "" }) => {
+            useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [name]);
+            return <i data-lucide={name} style={{width: size, height: size}} className={`${className} inline-block`}></i>;
+        };
+
+        const CITIES = ['Macaé', 'Rio das Ostras', 'Casimiro de Abreu', 'Barra de São João'];
+
+        const Logo = ({ light = false }) => (
+            <div className="flex items-center gap-3 cursor-pointer group">
+                <div className={`w-12 h-12 md:w-14 md:h-14 rounded-2xl flex items-center justify-center shadow-xl relative overflow-hidden ${light ? 'bg-white' : 'bg-blue-900'}`}>
+                    <span className={`text-xl md:text-2xl font-black italic z-10 ${light ? 'text-blue-900' : 'text-white'}`}>R</span>
+                    <div className="absolute inset-0 flex items-center justify-center text-orange-500 opacity-60">
+                        <Icon name="refresh-ccw" size={38} className="animate-spin-slow" />
+                    </div>
+                </div>
+                <div className="flex flex-col leading-none text-left">
+                    <span className={`text-lg font-black italic tracking-tighter ${light ? 'text-white' : 'text-blue-900'}`}>TROCA & VENDA</span>
+                    <span className="text-[9px] font-black uppercase text-orange-600 mt-1 tracking-widest text-left">PORTAL REGIONAL</span>
+                </div>
+            </div>
+        );
+
+        function App() {
+            const [user, setUser] = useState(null);
+            const [initializing, setInitializing] = useState(true);
+            const [products, setProducts] = useState([]);
+            const [searchTerm, setSearchTerm] = useState('');
+            const [selectedCity, setSelectedCity] = useState('Todas');
+            const [calcValue, setCalcValue] = useState(150);
+            const [modal, setModal] = useState(null);
+            const [isLoading, setIsLoading] = useState(false);
+            const [selectedProduct, setSelectedProduct] = useState(null);
+
+            // Form
+            const [formTitle, setFormTitle] = useState('');
+            const [formPrice, setFormPrice] = useState('');
+            const [formCity, setFormCity] = useState('Macaé');
+            const [formAcceptExchange, setFormAcceptExchange] = useState(true);
+
+            useEffect(() => {
+                auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
+                auth.getRedirectResult().then((result) => {
+                    if (result && result.user) setUser(result.user);
+                });
+                const unsubAuth = auth.onAuthStateChanged(u => { setUser(u); setInitializing(false); });
+                
+                const unsubAds = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('anuncios_v3')
+                    .onSnapshot(snap => setProducts(snap.docs.map(doc => ({ id: doc.id, ...doc.data() }))));
+                
+                return () => { unsubAuth(); unsubAds(); };
+            }, []);
+
+            const handleLogin = async () => {
+                setIsLoading(true);
+                try { await auth.signInWithRedirect(googleProvider); } catch (e) { setIsLoading(false); }
+            };
+
+            const handlePublish = async (e) => {
+                if(e) e.preventDefault();
+                if (!user) return setModal('publish'); // Se cair aqui sem user, o modal já vai mostrar o login
+                if (!formTitle || !formPrice) return alert("Preencha o título e o preço!");
+
+                setIsLoading(true);
+                try {
+                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('anuncios_v3').add({
+                        title: formTitle,
+                        price: parseFloat(formPrice) || 0,
+                        city: formCity,
+                        acceptExchange: formAcceptExchange,
+                        image: 'https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=800',
+                        seller_id: user.uid,
+                        seller_name: user.displayName,
+                        seller_photo: user.photoURL,
+                        promoted: false,
+                        timestamp: firebase.firestore.FieldValue.serverTimestamp()
+                    });
+                    setModal(null); setFormTitle(''); setFormPrice('');
+                    alert("Sucesso! Seu anúncio está no ar.");
+                } catch (err) { alert("Erro ao salvar."); } finally { setIsLoading(false); }
+            };
+
+            const handleGPay = (product) => {
+                if (!window.google) return;
+                const paymentsClient = new google.payments.api.PaymentsClient({ environment: 'TEST' });
+                paymentsClient.loadPaymentData({
+                    apiVersion: 2, apiVersionMinor: 0,
+                    allowedPaymentMethods: [{
+                        type: 'CARD',
+                        parameters: { allowedAuthMethods: ["PAN_ONLY", "CRYPTOGRAM_3DS"], allowedCardNetworks: ["VISA", "MASTERCARD"] },
+                        tokenizationSpecification: { type: 'PAYMENT_GATEWAY', parameters: { 'gateway': 'example', 'gatewayMerchantId': 'exampleMerchantId' } }
+                    }],
+                    merchantInfo: { merchantName: "Ramos Troca e Venda" },
+                    transactionInfo: { totalPriceStatus: 'FINAL', totalPrice: '10.00', currencyCode: 'BRL', countryCode: 'BR' }
+                }).then(async () => {
+                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('anuncios_v3').doc(product.id).update({
+                        promoted: true,
+                        promotedAt: firebase.firestore.FieldValue.serverTimestamp()
+                    });
+                    setModal(null);
+                    alert("Anúncio promovido ao topo!");
+                }).catch(err => console.error(err));
+            };
+
+            const sortedProducts = useMemo(() => {
+                const filtered = products.filter(p => (selectedCity === 'Todas' || p.city === selectedCity) && p.title.toLowerCase().includes(searchTerm.toLowerCase()));
+                return [...filtered].sort((a, b) => {
+                    if (a.promoted && !b.promoted) return -1;
+                    if (!a.promoted && b.promoted) return 1;
+                    return (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0);
+                });
+            }, [products, selectedCity, searchTerm]);
+
+            // CÁLCULOS CORRIGIDOS PARA R$ 150,00
+            const ramosTax = calcValue * 0.05;
+            const rivalTax = calcValue * 0.19;
+            const saving = rivalTax - ramosTax;
+
+            if (initializing) {
+                return (
+                    <div className="splash-screen text-center">
+                        <div className="animate-bounce mb-8"><Logo light={true} /></div>
+                        <div className="loader-circle mx-auto"></div>
+                        <p className="mt-6 font-black uppercase text-white tracking-widest text-[9px]">Validando Acesso Regional...</p>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="min-h-screen flex flex-col bg-slate-50 text-left">
+                    <nav className="h-20 px-4 border-b bg-white flex items-center justify-between sticky top-0 z-[50]">
+                        <Logo />
+                        {user ? (
+                            <img src={user.photoURL} onClick={() => setModal('panel')} className="w-10 h-10 rounded-full border-2 border-blue-600 shadow-md cursor-pointer" />
+                        ) : (
+                            <button onClick={handleLogin} className="bg-blue-600 text-white px-5 py-2.5 rounded-xl font-black text-[10px] uppercase shadow-lg active:scale-95 transition">Entrar</button>
+                        )}
+                    </nav>
+
+                    <main className="flex-1">
+                        {/* HERO E BUSCA */}
+                        <section className="py-12 px-4 text-center bg-white border-b border-slate-100">
+                            <h1 className="text-5xl font-black text-slate-900 mb-8 italic uppercase leading-none text-center">Ramos Troca <br/><span className="text-blue-700 underline decoration-orange-500">e Venda</span></h1>
+                            <div className="max-w-2xl mx-auto bg-slate-50 p-2 rounded-3xl shadow-xl border border-slate-200 text-left">
+                                <div className="flex flex-col md:flex-row divide-y md:divide-y-0 md:divide-x divide-slate-200">
+                                    <div className="flex-1 flex items-center px-6 py-4">
+                                        <Icon name="search" size={20} className="text-blue-600 mr-3" />
+                                        <input className="w-full font-bold outline-none text-lg bg-transparent" placeholder="O que você busca hoje?" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
+                                    </div>
+                                    <div className="flex items-center px-6 py-4 md:w-64">
+                                        <Icon name="map-pin" size={18} className="text-blue-600 mr-3" />
+                                        <select className="w-full font-black outline-none appearance-none bg-transparent cursor-pointer" value={selectedCity} onChange={e => setSelectedCity(e.target.value)}>
+                                            <option value="Todas">Toda a Região</option>
+                                            {CITIES.map(c => <option key={c} value={c}>{c}</option>)}
+                                        </select>
+                                    </div>
+                                    <button type="button" className="bg-orange-500 text-white py-5 px-8 rounded-2xl font-black uppercase active:scale-95 transition">BUSCAR</button>
+                                </div>
+                            </div>
+                        </section>
+
+                        {/* TAXAS CORRIGIDAS */}
+                        <section className="py-12 px-4 grid grid-cols-1 md:grid-cols-2 gap-6 max-w-5xl mx-auto text-left">
+                            <div className="bg-blue-600 p-8 rounded-[3rem] text-white flex justify-between items-center shadow-xl transform hover:scale-[1.02] transition">
+                                <div className="text-left text-left text-left"><p className="font-black text-xl uppercase italic leading-none text-left">Ramos Regional</p><p className="text-[10px] font-black opacity-80 mt-2 bg-white/20 px-2 py-1 rounded-full inline-block text-left">Sua Taxa 5%: R$ {ramosTax.toFixed(2)}</p></div>
+                                <p className="text-6xl font-black italic tracking-tighter text-left">5%</p>
+                            </div>
+                            <div className="bg-red-600 p-8 rounded-[3rem] text-white flex justify-between items-center shadow-lg opacity-95 text-left">
+                                <div className="text-left text-left text-left text-left"><p className="font-black text-lg leading-none uppercase italic text-left">OLX / Mercado Livre</p><p className="text-[10px] font-black opacity-80 mt-2 text-left">Taxas de 19%: R$ {rivalTax.toFixed(2)}</p></div>
+                                <p className="text-4xl font-black italic opacity-80 leading-none text-left">~19%</p>
+                            </div>
+                        </section>
+
+                        {/* SIMULADOR */}
+                        <section className="px-4 py-10 max-w-4xl mx-auto text-left">
+                            <div className="bg-slate-900 rounded-[3rem] p-10 text-white shadow-2xl text-left">
+                                <h3 className="text-xl font-black uppercase text-orange-500 flex items-center gap-2 italic text-left"><Icon name="zap" size={24} fill="currentColor" /> Simular Ganho Regional</h3>
+                                <div className="space-y-4 text-left mt-8">
+                                    <label className="text-[10px] font-black uppercase text-slate-400 block italic ml-1">Preço do seu Desapego (R$)</label>
+                                    <div className="relative text-left">
+                                        <span className="absolute left-6 top-1/2 -translate-y-1/2 font-black text-slate-500 text-2xl italic text-left">R$</span>
+                                        <input type="number" className="w-full bg-slate-800 border-2 border-slate-700 rounded-[2rem] py-8 px-16 text-4xl font-black text-white outline-none focus:border-blue-600 transition text-left" value={calcValue} onChange={e => setCalcValue(Number(e.target.value))} />
+                                    </div>
+                                </div>
+                                <div className="bg-white rounded-[2rem] p-8 text-slate-900 flex justify-between items-center shadow-xl text-left mt-8">
+                                    <div className="text-left text-left text-left text-left"><p className="text-[11px] font-black text-blue-600 uppercase mb-1 tracking-widest text-left text-left text-left">Economia no seu Bolso</p><p className="text-4xl font-black tracking-tighter italic text-left text-left">R$ {saving.toFixed(2)}</p></div>
+                                    <Icon name="trending-up" size={48} className="text-emerald-500 text-left" />
+                                </div>
+                            </div>
+                        </section>
+
+                        {/* VITRINE */}
+                        <section className="p-4 max-w-7xl mx-auto w-full mb-24 text-left">
+                            <h2 className="text-2xl font-black mb-10 border-l-8 border-orange-500 pl-4 uppercase italic">Vitrine Regional em {selectedCity}</h2>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8 text-left">
+                                {sortedProducts.map(p => (
+                                    <div key={p.id} className={`bg-white border rounded-[2.5rem] overflow-hidden shadow-sm flex flex-col hover:shadow-xl transition relative ${p.promoted ? 'border-4 border-yellow-400' : 'border-slate-100'}`}>
+                                        {p.promoted && <div className="tag-promoted absolute top-4 right-4 text-[9px] px-3 py-1.5 rounded-full z-10 uppercase flex items-center gap-1"><Icon name="zap" size={10} fill="currentColor" /> DESTAQUE</div>}
+                                        {p.acceptExchange && <div className="tag-exchange absolute top-4 left-4 text-[9px] px-3 py-1.5 rounded-full z-10 uppercase shadow-lg">ACEITA TROCA</div>}
+                                        
+                                        <div className="h-56 bg-slate-200"><img src={p.image} className="w-full h-full object-cover" alt={p.title} /></div>
+                                        <div className="p-6 flex flex-col flex-1 text-left">
+                                            <p className="text-[10px] font-black text-blue-600 uppercase mb-1">{p.city}</p>
+                                            <h3 className="font-bold text-lg leading-tight mb-4 line-clamp-2">{p.title}</h3>
+                                            <p className="text-2xl font-black italic text-slate-900 leading-none mt-auto">R$ {p.price.toLocaleString('pt-BR')}</p>
+                                            
+                                            {user && user.uid === p.seller_id && !p.promoted && (
+                                                <button onClick={() => { setSelectedProduct(p); setModal('promote'); }} className="mt-4 bg-black text-white py-3 rounded-2xl text-[9px] font-black uppercase flex items-center justify-center gap-2 active:scale-95 transition">
+                                                    <Icon name="zap" size={12} className="text-yellow-400" /> Promover Anúncio
+                                                </button>
+                                            )}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </section>
+                    </main>
+
+                    {/* BOTÃO FLUTUANTE (+) */}
+                    <button type="button" onClick={() => setModal('publish')} className="fixed bottom-8 right-8 w-16 h-16 bg-orange-500 text-white rounded-full shadow-2xl flex items-center justify-center z-[60] border-4 border-white animate-bounce active:scale-95 transition">
+                        <Icon name="plus" size={32} strokeWidth={3} />
+                    </button>
+
+                    {/* MODAIS SISTEMA */}
+                    {modal && (
+                        <div className="modal-overlay" onClick={(e) => { if(e.target === e.currentTarget) setModal(null); }}>
+                            <div className="modal-container">
+                                <div className="p-6 border-b flex justify-between items-center bg-white rounded-t-[2.5rem] text-left">
+                                    <h2 className="text-xl font-black uppercase italic text-blue-900 text-left">
+                                        {modal === 'publish' ? 'Anunciar Desapego' : modal === 'promote' ? 'Turbinar Anúncio' : 'Perfil'}
+                                    </h2>
+                                    <button type="button" onClick={() => setModal(null)} className="p-2 bg-slate-100 rounded-full active:scale-90 transition"><Icon name="x" size={20} /></button>
+                                </div>
+                                
+                                <div className="p-8 space-y-6 text-left bg-white rounded-b-[2.5rem]">
+                                    
+                                    {/* SEÇÃO LOGIN (Sempre visível se não logado) */}
+                                    {!user ? (
+                                        <div className="text-center py-6">
+                                            <Icon name="lock" size={64} className="text-blue-600 mx-auto opacity-20 mb-8" />
+                                            <p className="font-bold text-slate-600 italic mb-8 text-center px-4">Para anunciar ou promover no Ramos Regional, conecte-se com seu Gmail oficial.</p>
+                                            <button type="button" onClick={handleLogin} className="w-full bg-blue-600 text-white py-5 rounded-[2rem] font-black uppercase shadow-xl active:scale-95 transition flex items-center justify-center gap-3 text-center">
+                                                <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-6 h-6" /> CONECTAR GMAIL
+                                            </button>
+                                        </div>
+                                    ) : (
+                                        <>
+                                            {modal === 'publish' && (
+                                                <form onSubmit={handlePublish} className="space-y-6 text-left">
+                                                    <div className="space-y-2">
+                                                        <label className="text-[10px] font-black uppercase text-slate-400 ml-2">Título do Anúncio</label>
+                                                        <input required className="w-full bg-slate-50 border-2 border-slate-100 p-4 rounded-2xl font-bold outline-none focus:border-blue-600 transition" placeholder="Ex: iPhone 13 Pro Macaé" value={formTitle} onChange={e => setFormTitle(e.target.value)} />
+                                                    </div>
+                                                    <div className="grid grid-cols-2 gap-4">
+                                                        <div className="space-y-2 text-left">
+                                                            <label className="text-[10px] font-black uppercase text-slate-400 ml-2 text-left">Preço R$</label>
+                                                            <input type="number" required className="w-full bg-slate-50 border-2 border-slate-100 p-4 rounded-2xl font-bold outline-none" placeholder="0,00" value={formPrice} onChange={e => setFormPrice(e.target.value)} />
+                                                        </div>
+                                                        <div className="space-y-2 text-left">
+                                                            <label className="text-[10px] font-black uppercase text-slate-400 ml-2 text-left">Cidade</label>
+                                                            <select className="w-full bg-slate-50 border-2 border-slate-100 p-4 rounded-2xl font-black outline-none appearance-none" value={formCity} onChange={e => setFormCity(e.target.value)}>
+                                                                {CITIES.map(c => <option key={c} value={c}>{c}</option>)}
+                                                            </select>
+                                                        </div>
+                                                    </div>
+                                                    
+                                                    {/* BOTÃO ACEITA TROCA SOLICITADO */}
+                                                    <div 
+                                                        onClick={() => setFormAcceptExchange(!formAcceptExchange)}
+                                                        className={`p-5 rounded-2xl border-2 transition-all cursor-pointer flex items-center justify-between ${formAcceptExchange ? 'bg-blue-50 border-blue-200' : 'bg-slate-50 border-slate-200'}`}
+                                                    >
+                                                        <div className="text-left text-left">
+                                                            <p className={`font-black uppercase text-xs ${formAcceptExchange ? 'text-blue-700' : 'text-slate-500'}`}>Aceita Troca?</p>
+                                                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1 text-left">Dê mais opções para seus clientes</p>
+                                                        </div>
+                                                        <div className={`w-12 h-6 rounded-full relative transition-colors ${formAcceptExchange ? 'bg-blue-600' : 'bg-slate-300'}`}>
+                                                            <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${formAcceptExchange ? 'right-1' : 'left-1'}`}></div>
+                                                        </div>
+                                                    </div>
+
+                                                    <button type="submit" disabled={isLoading} className="w-full bg-blue-900 text-white py-6 rounded-[2rem] font-black uppercase italic tracking-widest shadow-2xl active:scale-95 transition disabled:opacity-50">
+                                                        {isLoading ? "PROCESSANDO..." : "PUBLICAR AGORA NO BANCO"}
+                                                    </button>
+                                                </form>
+                                            )}
+
+                                            {modal === 'promote' && (
+                                                <div className="text-center space-y-6">
+                                                    <Icon name="zap" size={64} className="text-yellow-500 mx-auto" fill="currentColor" />
+                                                    <p className="font-bold text-slate-600 italic">Destaque seu anúncio no topo da vitrine regional por apenas R$ 10,00.</p>
+                                                    <button onClick={() => handleGPay(selectedProduct)} className="w-full bg-black text-white py-5 rounded-[2rem] font-black uppercase flex items-center justify-center gap-3 active:scale-95 transition shadow-lg">
+                                                        <Icon name="play" size={20} fill="currentColor" className="text-emerald-400" /> PAGAR COM GOOGLE PAY
+                                                    </button>
+                                                </div>
+                                            )}
+
+                                            {modal === 'panel' && (
+                                                <div className="text-center py-8">
+                                                    <img src={user.photoURL} className="w-24 h-24 rounded-full border-4 border-blue-600 mx-auto shadow-xl mb-4" />
+                                                    <p className="text-xl font-black italic text-blue-900 mb-6">{user.displayName}</p>
+                                                    <button type="button" onClick={() => auth.signOut()} className="text-red-500 font-black uppercase text-xs tracking-widest border-b-2 border-red-50 pb-1 active:scale-95 transition">Sair da Conta</button>
+                                                </div>
+                                            )}
+                                        </>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    <footer className="bg-slate-900 text-white py-24 px-4 text-center mt-auto border-t-8 border-blue-600">
+                        <Logo light={true} />
+                        <div className="mt-10 space-y-4 opacity-40 text-center">
+                            <p className="text-[10px] font-black uppercase tracking-[0.3em]">Macaé • Rio das Ostras • Região</p>
+                            <p className="text-[10px] font-black uppercase tracking-[0.8em]">© 2026 RAMOS TROCA E VENDA</p>
+                        </div>
+                    </footer>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
+
